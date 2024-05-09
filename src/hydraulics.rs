@@ -6,7 +6,15 @@ use pyo3::types::PyTuple;
 pub struct Hydraulics;
 
 impl Actor for Hydraulics {
-    type Context = SyncContext<Self>;
+    type Context = Context<Self>;
+
+    fn started(&mut self, ctx: &mut Context<Self>) {
+       println!("Actor is alive");
+    }
+
+    fn stopped(&mut self, ctx: &mut Context<Self>) {
+       println!("Actor is stopped");
+    }
 }
 
 #[derive(Message)]
@@ -22,16 +30,18 @@ impl Handler<PySlug> for Hydraulics {
     type Result = Arc<Py<PyAny>>;
 
     fn handle(&mut self, msg: PySlug, _ctx: &mut Self::Context) -> Self::Result {
+        println!("hydraulics starting");
         Python::with_gil(|py| {
+            println!("Gil adquired, now preparing for python");
             let args = PyTuple::new_bound(py, &[msg.0]);
             let locals = [("pickle", py.import_bound("pickle").unwrap())].into_py_dict_bound(py);
             let _ = locals.set_item("slug", args);
-            let code = "
-            pump = pickle.loads(slug)
-            pump.load()
-            return pump
-            ";
+            let code 
+            = "print(slug[0])";
+
+            println!("running python");
             let loaded_slug: Py<PyAny> = py.eval_bound(code, None, Some(&locals)).unwrap().extract().unwrap(); 
+            println!("python ran");
             Arc::new(loaded_slug)
         })
     }
