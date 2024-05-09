@@ -2,8 +2,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 use actix::prelude::*;
 
-struct Pump {
-    pypump: Py<PyAny>,
+pub struct Pump {
+    pub pypump: Py<PyAny>,
 }
 
 impl Actor for Pump {
@@ -16,7 +16,7 @@ impl Actor for Pump {
 /// Stuff will be serialised and deserialised in JSON anyway
 #[derive(Message)]
 #[rtype(result = "String")]
-struct Fuel(String);
+pub struct Fuel(pub String);
 
 impl Handler<Fuel> for Pump {
     type Result = String;

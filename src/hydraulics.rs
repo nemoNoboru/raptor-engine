@@ -3,17 +3,15 @@ use pyo3::{prelude::*, types::IntoPyDict};
 use actix::prelude::*;
 use pyo3::types::PyTuple;
 
-struct Hydraulics {
-
-}
+pub struct Hydraulics;
 
 impl Actor for Hydraulics {
-    type Context = Context<Self>;
+    type Context = SyncContext<Self>;
 }
 
 #[derive(Message)]
 #[rtype(result="Arc<Py<PyAny>>")]
-struct PySlug(Vec<u8>);
+pub struct PySlug(pub Vec<u8>);
 
 /// Highly unlikely that this stuff will work any time soon
 /// PLaying with raw binary data of a python class in rust

@@ -1,25 +1,66 @@
+use actix::{Actor, Addr, Handler, SyncArbiter};
+use pyo3::prelude::*;
+use rocket::{data::ToByteUnit, tokio::{io::AsyncReadExt, sync::RwLock}, Data, Error, State};
 use std::{collections::HashMap, sync::Arc};
 
-use actix::Handler;
+#[macro_use]
+extern crate rocket;
 
-#[macro_use] extern crate rocket;
-
-mod pump;
 mod hydraulics;
+mod pump;
 
-#[post("/load/<pump_name>")]
-fn load_pump(pump_name: &str) {
-    // Get a Hydraulics Actor system and spawn a Pump 
+static HYDRAULICS_WORKERS: usize = 2;
+
+/// Get a Hydraulics Actor system and spawn a Pump
+#[post("/load/<pump_name>", data = "<data>")]
+async fn load_pump(
+    pump_name: String,
+    data: Data<'_>,
+    shared_hydraulics: &State<Addr<hydraulics::Hydraulics>>,
+    shared_pumps: &State<Arc<RwLock<HashMap<String, actix::Addr<pump::Pump>>>>>,
+) -> String {
+    // Read the bytes from python
+    let mut buffer: Vec<u8> = Vec::new();
+    data.open(512.kibibytes()).read_to_end(&mut buffer).await.unwrap();
+
+    let pyslug = hydraulics::PySlug { 0: buffer };
+
+    // Send and Extract the pyObject back
+    let arc_py_pump = shared_hydraulics.send(pyslug).await.unwrap();
+    let py_pump: Py<PyAny> = Arc::into_inner(arc_py_pump).unwrap();
+
+    let pump_addr = pump::Pump { pypump: py_pump }.start();
+
+    let mut mut_shared_pumps = shared_pumps.write().await;
+
+    mut_shared_pumps.insert(pump_name, pump_addr);
+
+    "OK".to_string()
 }
 
-#[post("/invoke/<pump_name>")]
-fn run_pump(pump_name: &str) {
+#[post("/invoke/<pump_name>", data = "<inputs>")]
+async fn run_pump(pump_name: String, inputs: String, shared_pumps: &State<Arc<RwLock<HashMap<String, actix::Addr<pump::Pump>>>>>) -> String {
     // Get that Pump Actor and send data to it, then return
+    let read_shared_pumps = shared_pumps.read().await;
+
+    let pump_handler = read_shared_pumps.get(&pump_name).unwrap();
+
+    let msg = pump::Fuel {0: inputs};
+    let result = pump_handler.send(msg).await.unwrap();
+
+    result
+
 }
 
 // Add a Thread-Safe shared hashmap with the list of actors and addrs shared to rockets handlers.
+#[actix_rt::main]
 #[launch]
-fn rocket() -> _ {
-    let shared_map = Arc::new(HashMap<String,Handler>::new());
-    rocket::build().mount("/", routes![load_pump, run_pump])
+async fn rocket() -> _ {
+    let shared_pumps = Arc::new(RwLock::new(HashMap::<String, actix::Addr<pump::Pump>>::new()));
+    let shared_hydraulics = SyncArbiter::start(HYDRAULICS_WORKERS, || hydraulics::Hydraulics);
+
+    rocket::build()
+        .manage(shared_hydraulics)
+        .manage(shared_pumps)
+        .mount("/", routes![load_pump, run_pump])
 }
