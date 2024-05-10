@@ -1,16 +1,16 @@
-use actix::{Actor, Addr, Handler, SyncArbiter, System};
-use pyo3::prelude::*;
-use rocket::{data::ToByteUnit, tokio::{io::AsyncReadExt, sync::RwLock}, Data, Error, State};
-use std::{collections::HashMap, sync::Arc};
-use rocket::form::Form;
+use actix::{Actor, Addr, SyncArbiter};
+use percent_encoding::percent_decode_str;
+use rocket::{tokio::sync::RwLock,  State};
+use std::{collections::HashMap, fs, sync::Arc};
 
 #[macro_use]
 extern crate rocket;
+use base64::prelude::*;
 
 mod hydraulics;
 mod pump;
 
-static HYDRAULICS_WORKERS: usize = 2;
+static HYDRAULICS_WORKERS: usize = 4;
 
 /// Get a Hydraulics Actor system and spawn a Pump
 /// 
@@ -18,30 +18,28 @@ static HYDRAULICS_WORKERS: usize = 2;
 /// Just stream the bytes to a file
 /// then read it using python
 /// don't make your life harder than it meant to be
-#[post("/load/<pump_name>", data = "<data>")]
+#[post("/load/<pump_name>", data = "<file>")]
 async fn load_pump(
     pump_name: String,
-    data: Vec<u8>,
+    file: String,
     shared_hydraulics: &State<Addr<hydraulics::Hydraulics>>,
     shared_pumps: &State<Arc<RwLock<HashMap<String, actix::Addr<pump::Pump>>>>>,
 ) -> String {
-    // Read the bytes from python
-    // let mut buffer: Vec<u8> = Vec::new();
-    // data.open(512.kibibytes()).read_to_end(&mut buffer).await.unwrap();
+    let file_decoded : String = percent_decode_str(&file).decode_utf8_lossy().to_string();
 
-    println!("{:?}", String::from_utf8(data.clone()));
+    let path = "slugs/test.pkl";
 
-    let pyslug = hydraulics::PySlug { 0: data.clone() };
+    let bin_slug = BASE64_STANDARD.decode(file_decoded).unwrap();
 
-    // Send and Extract the pyObject back
-    let arc_py_pump = 
+    fs::write(path, bin_slug).unwrap();
+
+    let pyslug = hydraulics::PySlug { 0: path.to_string() };
+
+    let pump_addr = 
     match shared_hydraulics.send(pyslug).await {
-        Ok(T) => T,
-        Err(E) => panic!("Problem sending to hydraulics: {:?}", E)
+        Ok(t) => t,
+        Err(e) => panic!("Problem sending to hydraulics: {:?}", e)
     };
-    let py_pump: Py<PyAny> = Arc::into_inner(arc_py_pump).unwrap();
-
-    let pump_addr = pump::Pump { pypump: py_pump }.start();
 
     let mut mut_shared_pumps = shared_pumps.write().await;
 
@@ -61,13 +59,12 @@ async fn run_pump(pump_name: String, inputs: String, shared_pumps: &State<Arc<Rw
     let result = pump_handler.send(msg).await.unwrap();
 
     result
-
 }
 
 // Add a Thread-Safe shared hashmap with the list of actors and addrs shared to rockets handlers.
 #[actix_rt::main]
 async fn main() {
-    // let _ = System::new();
+    // maybe move the rwlock-hashmap etc shanenigans to a dedicated actor.
     let shared_pumps = Arc::new(RwLock::new(HashMap::<String, actix::Addr<pump::Pump>>::new()));
     let shared_hydraulics = hydraulics::Hydraulics.start();
 

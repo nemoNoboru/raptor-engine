@@ -1,25 +1,26 @@
-use std::sync::Arc;
-use pyo3::{prelude::*, types::IntoPyDict};
+use pyo3::prelude::*;
 use actix::prelude::*;
 use pyo3::types::PyTuple;
+
+use crate::pump;
 
 pub struct Hydraulics;
 
 impl Actor for Hydraulics {
     type Context = Context<Self>;
 
-    fn started(&mut self, ctx: &mut Context<Self>) {
+    fn started(&mut self, _ctx: &mut Context<Self>) {
        println!("Actor is alive");
     }
 
-    fn stopped(&mut self, ctx: &mut Context<Self>) {
+    fn stopped(&mut self, _ctx: &mut Context<Self>) {
        println!("Actor is stopped");
     }
 }
 
 #[derive(Message)]
-#[rtype(result="Arc<Py<PyAny>>")]
-pub struct PySlug(pub Vec<u8>);
+#[rtype(result="Addr<pump::Pump>")]
+pub struct PySlug(pub String);
 
 /// Highly unlikely that this stuff will work any time soon
 /// PLaying with raw binary data of a python class in rust
@@ -27,22 +28,24 @@ pub struct PySlug(pub Vec<u8>);
 /// If this works any time soon then it should return a ARC with a python class inside.
 /// To be sent to a Pump so it can start pumping requests
 impl Handler<PySlug> for Hydraulics {
-    type Result = Arc<Py<PyAny>>;
+    type Result = Addr<pump::Pump>;
 
     fn handle(&mut self, msg: PySlug, _ctx: &mut Self::Context) -> Self::Result {
-        println!("hydraulics starting");
         Python::with_gil(|py| {
-            println!("Gil adquired, now preparing for python");
-            let args = PyTuple::new_bound(py, &[msg.0]);
-            let locals = [("pickle", py.import_bound("pickle").unwrap())].into_py_dict_bound(py);
-            let _ = locals.set_item("slug", args);
-            let code 
-            = "print(slug[0])";
+           let py_loader: Py<PyAny> = PyModule::from_code_bound(
+            py,
+            "import pickle
+def load(arg):
+    print(arg)
+    with open(arg,'rb') as input_file:
+        return pickle.load(input_file)"
+            , "","").unwrap().getattr("load").unwrap().into();
 
-            println!("running python");
-            let loaded_slug: Py<PyAny> = py.eval_bound(code, None, Some(&locals)).unwrap().extract().unwrap(); 
-            println!("python ran");
-            Arc::new(loaded_slug)
+            let args = PyTuple::new_bound(py, [msg.0]);
+
+            let result = py_loader.call_bound(py, args, None).unwrap();
+
+            pump::Pump{pypump: result}.start()
         })
     }
 }
