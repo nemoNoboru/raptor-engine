@@ -7,7 +7,7 @@ pub struct Pump {
 }
 
 impl Actor for Pump {
-    type Context = Context<Self>;
+    type Context = SyncContext<Self>;
 }
 
 /// Pump: Basis of the whole system

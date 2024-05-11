@@ -45,7 +45,10 @@ def load(arg):
 
             let result = py_loader.call_bound(py, args, None).unwrap();
 
-            pump::Pump{pypump: result}.start()
+            
+            // pump::Pump{pypump: result}.start()
+            SyncArbiter::start(4, move || pump::Pump { pypump: result.clone() })
         })
+        
     }
 }

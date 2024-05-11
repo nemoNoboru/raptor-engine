@@ -1,7 +1,7 @@
 use actix::{Actor, Addr, SyncArbiter};
 use percent_encoding::percent_decode_str;
 use rocket::{tokio::sync::RwLock,  State};
-use std::{collections::HashMap, fs, sync::Arc};
+use std::{collections::HashMap, fs, sync::{atomic::{AtomicBool, Ordering}, Arc}};
 
 #[macro_use]
 extern crate rocket;
@@ -49,29 +49,47 @@ async fn load_pump(
 }
 
 #[post("/invoke/<pump_name>", data = "<inputs>")]
-async fn run_pump(pump_name: String, inputs: String, shared_pumps: &State<Arc<RwLock<HashMap<String, actix::Addr<pump::Pump>>>>>) -> String {
+async fn run_pump(pump_name: String, inputs: String, shared_pumps: &State<Arc<RwLock<HashMap<String, actix::Addr<pump::Pump>>>>>, py_status_ready: &State<AtomicBool>) -> String {
     // Get that Pump Actor and send data to it, then return
     let read_shared_pumps = shared_pumps.read().await;
 
     let pump_handler = read_shared_pumps.get(&pump_name).unwrap();
 
     let msg = pump::Fuel {0: inputs};
+
+    println!("current status is  {}", py_status_ready.load(Ordering::SeqCst));
+
+    // block the status as not ready, run python and then set it to ready again.
+    py_status_ready.store(false, Ordering::SeqCst);    
     let result = pump_handler.send(msg).await.unwrap();
+    py_status_ready.store(true, Ordering::SeqCst); 
 
     result
+}
+
+#[get("/status")]
+async fn check_status(py_status_ready: &State<AtomicBool>) -> String {
+
+    let status: bool = py_status_ready.load(Ordering::SeqCst);
+    match status {
+        true => "ready".to_string(),
+        false => "processing".to_string()
+    }
 }
 
 // Add a Thread-Safe shared hashmap with the list of actors and addrs shared to rockets handlers.
 #[actix_rt::main]
 async fn main() {
     // maybe move the rwlock-hashmap etc shanenigans to a dedicated actor.
+    let py_status_ready = AtomicBool::new(true);
     let shared_pumps = Arc::new(RwLock::new(HashMap::<String, actix::Addr<pump::Pump>>::new()));
     let shared_hydraulics = hydraulics::Hydraulics.start();
 
     rocket::build()
+        .manage(py_status_ready)
         .manage(shared_hydraulics)
         .manage(shared_pumps)
-        .mount("/", routes![load_pump, run_pump])
+        .mount("/", routes![load_pump, run_pump, check_status])
         .launch()
         .await.unwrap();
 }
